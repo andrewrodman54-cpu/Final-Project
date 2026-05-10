@@ -1,0 +1,178 @@
+---
+title: "VTPEH6270-Final Report"
+author: "Andrew Rodman"
+date: "2026-05-09"
+bibliography: references.bib
+output:
+  pdf_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+## Research Question
+
+Do Uninsured Rates of a county effect the rates of flu cases in NYS?
+
+## Scientific Plausibility and Context
+
+Influenza is a disease with an available vaccination each year. It is seen that those who have lower socioeconomic status are less likely to have health insurance [@schnake2025neighborhood]. Though flu vaccinations can be free and low-cost through community health clinics, having no health insurance still affects the access to care for receiving the flu vaccination [@akpalu2020association]. Findings show that individuals with health insurance are almost 2 times more likely to receive the flu vaccine than those without health insurance [@Yan2020How]. Thus, the rates should be higher in areas with higher uninsured areas.
+
+
+# Material and Methods
+
+## Packages 
+
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(glmmTMB)
+library(DHARMa)
+library(car)
+```
+
+## Data
+
+Data was derived from both the CDC's Social Vulnerability Index and Flu Data from the NYS DOH showing county level data on flu cases by week. The SVI data was collected and found from publicly available Census data through community surveys. The flu data was collected through public health surveillance through reported cases submitted by healthcare providers and labs across the state. For the SVI data we utilized EP_UNINSUR variable that shows the percentage of the population that is uninsured. For the flu data, we merged each week into a by year setup for easier access and then calculated the data by incidence rate.
+
+```{r, warning=FALSE, message=FALSE}
+setwd("C:/Users/andre/OneDrive/Documents/VTPEH6270/")
+fludata = read.csv("Data/Influenza_Laboratory-Confirmed_Cases_by_County__Beginning_2009-10_Season_20260202.csv")
+svi = read.csv("Data/SVI_2016_US_county.csv")
+
+flu_svi = merge(fludata, svi, by= "FIPS", all.x = T)
+flu_svi$Count <- as.numeric(flu_svi$Count)
+flu_svi$Week.Ending.Date <- as.Date(flu_svi$Week.Ending.Date, format = "%m/%d/%Y")
+flu_svi$Season_Year <- as.numeric(substr(flu_svi$Season, 6, 9))
+flu_svi = flu_svi[, c("Season_Year",
+                      "Region",
+                      "County",
+                      "Week.Ending.Date",
+                      "Disease",
+                      "Count",
+                      "E_TOTPOP",
+                      "EP_POV",
+                      "E_PCI",
+                      "EP_UNEMP",
+                      "FIPS",
+                      "EP_UNINSUR")]
+flu_svi <- flu_svi %>%
+  rename(Total_Pop = E_TOTPOP,
+         Poverty_Rate = EP_POV,
+         Income_Per_Capita = E_PCI,
+         Date = Week.Ending.Date,
+         Unemployment_Rate = EP_UNEMP,
+         Uninsured_Rate = EP_UNINSUR)
+
+flu_svi_year <- flu_svi %>%
+group_by(Season_Year, County) %>%
+summarise(
+Region = first(Region),
+Total_Count = sum(Count),
+Total_Pop = first(Total_Pop),
+Poverty_Rate = first(Poverty_Rate),
+Income_Per_Capita = first(Income_Per_Capita),
+Unemployment_Rate = first(Unemployment_Rate),
+Uninsured_Rate = first(Uninsured_Rate),
+FIPS = first(FIPS),
+.groups = "drop"
+)
+flu_svi_year <- flu_svi_year %>%
+mutate(Incidence_Rate = (Total_Count / Total_Pop) * 100000)
+
+flu_svi_year <- flu_svi_year %>%
+  filter(!is.na(Uninsured_Rate),
+         !is.na(Incidence_Rate),
+         !is.na(County),
+         !is.na(Season_Year))
+```
+
+
+## Statistical Analysis
+
+```{r}
+ggplot(flu_svi_year, aes(x = Uninsured_Rate, y = Incidence_Rate)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  theme_minimal()
+```
+
+
+We will use a Mixed Effects Negative Binomial test because of the repeated measures included in the data, and the data set violating normality and is overdispersed. This accounts for the repeated measures in which County and Season_Year by giving them random effect variances. Every other test I tried failed the assumption tests because of this.
+
+### Model
+
+```{r, warning= FALSE}
+m_final <- glmmTMB(Incidence_Rate ~ Uninsured_Rate +
+                     (1 | County) +
+                     (1 | Season_Year),
+                   family = nbinom2,
+                   data = flu_svi_year)
+
+summary(m_final)
+```
+
+### Assumption Check
+
+```{r}
+
+# 1. Simulate Residuals 
+sim <- simulateResiduals(m_final, plot = TRUE)
+
+# 2. Uniformity Test 
+testUniformity(sim)
+
+# 3. Overdispersion Test 
+testDispersion(sim)
+
+# 4. Zero Inflation Test 
+testZeroInflation(sim)
+
+# 5. Outlier Test 
+testOutliers(sim)
+
+# 6. Residuals vs Predictors 
+plotResiduals(sim, flu_svi_year$Uninsured_Rate,
+              xlab = "Uninsured Rate (%)",
+              main = "Residuals vs Uninsured Rate")
+
+# 7. Residuals vs Fitted 
+plotResiduals(sim, predict(m_final),
+              xlab = "Fitted Values",
+              main = "Residuals vs Fitted")
+
+```
+## Code
+
+https://github.com/andrewrodman54-cpu/VTPEH-6270
+
+# Results
+
+## Visualization
+
+```{r}
+ggplot(flu_svi_year, aes(x = Uninsured_Rate, y = Incidence_Rate)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  theme_minimal()
+```
+This graph shows a scatter plot showing that their is minimal effect that the uninsured rate has on the incidence rates. 
+
+## Statistical Analysis
+
+After running the Mixed Effects Negative Binomial Model, we see that the Uninsured rate is Not statistically significant with flu incidence rates (p = 0.419). The Year seemingly causes more variation than that of county level factors found in the SVI, County Variance = 0.087 (SD = 0.29) vs Year Variance = 1.583 (SD = 1.26). 
+
+# Conclusions
+
+My results differed vastly from the literature, but this would've been because of a multiple of factors. Since my data showcases repeated measures of the same counties multiple times, this causes each year to have influence over the data. Since many flu years differ in the number of cases, the data will showcase the changes between the uninsured rate and incidence rate minimally. 
+
+# AI Use Disclosure Statement
+
+Claude was used to identify a test to be used for my complex data set and used to ran the assumption checks for testing. 
+
+# References 
